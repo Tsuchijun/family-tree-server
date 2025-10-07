@@ -1,0 +1,1443 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>家系図エディタ【共同編集版】</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; height: 100vh; overflow: hidden; }
+h1 { color: #333; margin: 15px 0; flex-shrink: 0; }
+#root { display: flex; flex-direction: column; flex-grow: 1; min-height: 0; width: 100%; align-items: center; position: relative; }
+
+.main-toolbar { position: absolute; top: 5px; left: 5px; z-index: 20; display: flex; gap: 8px; align-items: flex-start; }
+.toolbar-group { background: rgba(255,255,255,0.8); border-radius: 4px; padding: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.2); display: flex; }
+.main-toolbar button { background: none; border: none; font-size: 14px; height: 35px; padding: 0 10px; cursor: pointer; border-radius: 4px; transition: background-color 0.2s; }
+.main-toolbar .undo-redo-button { font-size: 20px; width: 35px; padding: 0; }
+.main-toolbar button:hover:not(:disabled) { background-color: #e0e0e0; }
+.main-toolbar button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.search-container { flex-direction: column; position: relative; }
+.search-input { height: 35px; border: 1px solid #ccc; border-radius: 4px; padding: 0 8px; font-size: 14px; width: 180px; box-sizing: border-box; }
+.search-results { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; max-height: 200px; overflow-y: auto; z-index: 30; }
+.search-results button { width: 100%; text-align: left; white-space: nowrap; }
+.person-node.highlighted > .person-node-name-group > rect {
+  stroke: #28a745;
+  stroke-width: 3.5px;
+  filter: drop-shadow(0px 0px 6px rgba(40, 167, 69, 0.8));
+}
+
+.editor-container.linking-mode, .editor-container.line-drawing-mode { cursor: crosshair; }
+.editor-container {
+cursor: grab;
+width: 95vw;
+flex-grow: 1;
+margin-bottom: 20px;
+border: 1px solid #ccc;
+border-radius: 8px;
+background-color: #fff;
+box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+touch-action: none;
+}
+.editor-container:active { cursor: grabbing; }
+.person-node { cursor: grab; }
+.person-node:active { cursor: grabbing; }
+.person-node-name-group, .arrow-button, .link-button, .delete-button, .edit-button { cursor: pointer; }
+.person-node.linking-source { filter: drop-shadow(0px 0px 6px rgba(0, 123, 255, 0.9)); }
+.person-node text { font-size: 16px; user-select: none; }
+.person-node.selected > .person-node-name-group > rect {
+  stroke: #007bff;
+  stroke-width: 3px;
+  filter: drop-shadow(0px 0px 4px rgba(0, 123, 255, 0.6));
+}
+.relationship-line.selected, .spouse-line.selected, .sibling-line.selected, .child-connector.selected, .sibling-connector.selected {
+  stroke: #007bff;
+  stroke-width: 3.5px;
+  stroke-opacity: 0.8;
+}
+.name-input-vertical {
+font-family: inherit;
+font-size: 16px;
+writing-mode: vertical-rl;
+text-orientation: mixed;
+border: 1px solid #007bff;
+border-radius: 4px;
+width: 30px;
+padding: 5px;
+resize: none;
+text-align: start;
+overflow: hidden;
+box-sizing: border-box;
+line-height: 1.5;
+}
+.arrow-button, .link-button, .edit-button { fill: #007bff; opacity: 0.7; transition: opacity 0.2s; }
+.arrow-button:hover, .link-button:hover, .edit-button:hover { opacity: 1.0; }
+.delete-button { fill: #dc3545; opacity: 0.7; }
+.delete-button:hover { opacity: 1.0; }
+.relationship-line, .spouse-line, .sibling-line, .child-connector, .sibling-connector {
+stroke: #555;
+stroke-width: 2px;
+fill: none;
+}
+.spouse-line { stroke-width: 1.5px; }
+.link-menu, .child-add-menu, .edit-menu { background-color: white; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); padding: 8px; z-index: 10; font-size: 14px; }
+.link-menu button, .child-add-menu button, .edit-menu button { background: none; border: none; padding: 8px 12px; text-align: left; width: 100%; cursor: pointer; display: block; white-space: nowrap; font-size: 14px; }
+.link-menu button:hover, .child-add-menu button:hover, .edit-menu button:hover { background-color: #f0f0f0; }
+.edit-menu-section { padding: 5px 0; display: flex; flex-direction: column; gap: 4px; }
+.edit-menu-section label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.edit-menu-section select { width: 100%; padding: 2px; border-radius: 4px; }
+.edit-menu-section input[type="color"] { width: 40px; height: 25px; padding: 2px; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; }
+.edit-menu hr { border: none; border-top: 1px solid #eee; margin: 8px 0; }
+.status-bar { height: 25px; margin-bottom: 5px; background-color: #e9ecef; width: 95vw; border-radius: 4px; display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: #495057; flex-shrink: 0; padding: 0 10px; box-sizing: border-box; }
+.status-bar b { color: #007bff; padding: 0 4px; }
+.status-bar-text { flex-grow: 1; text-align: center; }
+.status-bar-controls { display: flex; align-items: center; }
+.status-bar button { padding: 2px 8px; margin: 0 5px; border: 1px solid #007bff; background-color: #007bff; color: white; border-radius: 4px; cursor: pointer; }
+.status-bar button:disabled { background-color: #ccc; border-color: #ccc; cursor: not-allowed; }
+.smart-guide { stroke: #007bff; stroke-width: 1px; stroke-dasharray: 4, 4; }
+
+.line-handle {
+stroke: transparent;
+stroke-width: 20px;
+fill: none;
+pointer-events: stroke;
+transition: stroke 0.2s ease-in-out;
+}
+.spouse-line-handle { cursor: ns-resize; }
+.spouse-line-handle:hover { stroke: rgba(0, 123, 255, 0.3); }
+.child-connector-handle { cursor: ew-resize; }
+.child-connector-handle:hover { stroke: rgba(255, 165, 0, 0.5); }
+.single-parent-line-handle { cursor: ns-resize; }
+.single-parent-line-handle:hover { stroke: rgba(128, 0, 128, 0.5); }
+.sibling-line-handle { cursor: ns-resize; }
+.sibling-line-handle:hover { stroke: rgba(40, 167, 69, 0.5); }
+.two-parent-child-mid-line-handle { cursor: ns-resize; }
+.two-parent-child-mid-line-handle:hover { stroke: rgba(255, 193, 7, 0.5); }
+.line-drawing-target {
+fill: rgba(0, 123, 255, 0.3);
+stroke: rgba(0, 123, 255, 0.8);
+cursor: crosshair;
+transition: all 0.2s;
+}
+.line-drawing-target:hover { fill: rgba(0, 123, 255, 0.5); }
+</style>
+</head>
+<body>
+<h1>家系図エディタ【共同編集版】</h1>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useRef, useEffect, useMemo, useCallback } = React;
+
+const FONT_OPTIONS = [
+  { value: 'sans-serif', label: 'ゴシック体 (標準)' },
+  { value: 'serif', label: '明朝体' },
+  { value: "'Meiryo', 'メイリオ', sans-serif", label: 'メイリオ' },
+  { value: "'Yu Mincho', 'YuMincho', serif", label: '游明朝' },
+  { value: "'Yu Gothic', 'YuGothic', sans-serif", label: '游ゴシック' },
+  { value: "'MS Mincho', serif", label: 'MS 明朝' },
+  { value: "'MS Gothic', sans-serif", label: 'MS ゴシック' },
+  { value: "'Yu Kyokasho', 'YuKyokasho', serif", label: '教科書体' },
+  { value: "monospace", label: '等幅フォント' },
+];
+
+const Person = ({ person, onAddPerson, onUpdateName, onUpdatePersonStyle, onUpdatePersonTitle, onDeletePerson, onNodePointerDown, onNodeClick, onStartLink, linkingState, layout, getSpousesOf, bringToFront, lineDrawingState, onPointSelect, relationships, isSelected, isHighlighted }) => {
+const [isEditing, setIsEditing] = useState(false);
+const [name, setName] = useState(person.name);
+const [isHovered, setIsHovered] = useState(false);
+const [linkMenuVisible, setLinkMenuVisible] = useState(false);
+const [childAddMenuVisible, setChildAddMenuVisible] = useState(false);
+const [editMenuVisible, setEditMenuVisible] = useState(false);
+const [isEditingTitle, setIsEditingTitle] = useState(false);
+const [titleText, setTitleText] = useState(person.title || '');
+const nameInputRef = useRef(null);
+const [enterPressCount, setEnterPressCount] = useState(0);
+
+useEffect(() => {
+    if (!isEditing) {
+        setName(person.name);
+    }
+}, [person.name, isEditing]);
+
+
+const handleNameClick = (e) => {
+    e.stopPropagation();
+    if (linkingState.active) {
+        onNodeClick(person.id);
+    } else {
+        if (person.name === '新しい人物') {
+            setName('');
+        }
+        setIsEditing(true);
+        setEnterPressCount(0);
+    }
+};
+const handleNameChange = (e) => setName(e.target.value);
+const handleNameBlur = () => {
+    setIsEditing(false);
+    onUpdateName(person.id, name || '名称未設定');
+    setEnterPressCount(0);
+};
+
+const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        if (enterPressCount === 1) {
+            handleNameBlur();
+        } else {
+            setEnterPressCount(1);
+        }
+    } else {
+        setEnterPressCount(0);
+    }
+};
+const handleLinkButtonClick = (e) => {
+    e.stopPropagation();
+    bringToFront(person.id);
+    setLinkMenuVisible(!linkMenuVisible);
+    setChildAddMenuVisible(false);
+    setEditMenuVisible(false);
+};
+const handleAddChildClick = (e) => {
+    e.stopPropagation();
+    bringToFront(person.id);
+    setChildAddMenuVisible(!childAddMenuVisible);
+    setLinkMenuVisible(false);
+    setEditMenuVisible(false);
+};
+const handleEditButtonClick = (e) => {
+    e.stopPropagation();
+    bringToFront(person.id);
+    setEditMenuVisible(!editMenuVisible);
+    setLinkMenuVisible(false);
+    setChildAddMenuVisible(false);
+};
+
+const handleEditTitleClick = (e) => {
+    e.stopPropagation();
+    setTitleText(person.title || '');
+    setIsEditingTitle(true);
+    setEditMenuVisible(false);
+};
+
+
+useEffect(() => {
+    if (isEditing && nameInputRef.current) {
+        const textarea = nameInputRef.current;
+        textarea.style.height = 'auto';
+        const newHeight = Math.max(120, textarea.scrollHeight);
+        textarea.style.height = `${newHeight}px`;
+        const foreignObjectY = -65 - (newHeight - 120) / 2;
+        nameInputRef.current.closest('foreignObject').setAttribute('y', foreignObjectY);
+        nameInputRef.current.closest('foreignObject').setAttribute('height', newHeight + 10);
+    }
+}, [isEditing, name]);
+
+const ARROW_SIZE = 20;
+const ARROW_SPACING_V = 14;
+const ARROW_OFFSET_X = 28;
+const SIBLING_ARROW_OFFSET_X = 25;
+const BUTTON_OFFSET_X = 22;
+
+const FONT_SIZE = 16, PADDING = 4;
+const rectWidth = FONT_SIZE + PADDING * 2;
+let { rectHeight } = layout;
+const spouses = useMemo(() => getSpousesOf(person.id), [person.id, getSpousesOf]);
+
+const titleRequiresWrapping = useMemo(() => {
+    if (!relationships || !person || !layout) return false;
+    const spouseRels = relationships.filter(r => r.type === 'spouse' && (r.sourceId === person.id || r.targetId === person.id));
+    const personTopY = person.y - rectHeight / 2;
+    for (const rel of spouseRels) {
+        if (rel.lineY < personTopY - 10) { 
+            return true;
+        }
+    }
+    return false;
+}, [person.id, person.y, rectHeight, relationships]);
+
+const titleBoxWidth = titleRequiresWrapping ? 60 : 30;
+
+const dynamicArrowOffsetY = rectHeight / 2 + ARROW_SPACING_V;
+const hoverRectWidth = ARROW_OFFSET_X * 2 + ARROW_SIZE;
+const hoverRectHeight = (dynamicArrowOffsetY + ARROW_SIZE) * 2;
+
+const isInvisible = person.name === 'eee';
+
+const handleUpArrowClick = (e) => {
+    e.stopPropagation();
+    if (lineDrawingState.active) {
+        onPointSelect({ type: 'person', id: person.id, position: 'top' });
+    } else {
+        onAddPerson({ person, type: 'parent' });
+    }
+};
+
+const handleDownArrowClick = (e) => {
+    e.stopPropagation();
+    if (lineDrawingState.active) {
+        onPointSelect({ type: 'person', id: person.id, position: 'bottom' });
+    } else if (spouses.length > 0) {
+        handleAddChildClick(e);
+    } else {
+        onAddPerson({ person, type: 'child', parentIds: [person.id] });
+    }
+};
+
+const personStyles = {
+    fontWeight: person.isBold ? 'bold' : 'normal',
+    fontStyle: person.isItalic ? 'italic' : 'normal',
+    fill: person.textColor || '#333333',
+    fontFamily: person.fontFamily || 'sans-serif'
+};
+
+return (
+<g
+transform={`translate(${person.x}, ${person.y})`}
+className={`person-node ${linkingState.active && linkingState.sourceId === person.id ? 'linking-source' : ''} ${isSelected ? 'selected' : ''} ${isHighlighted ? 'highlighted' : ''}`}
+data-person-id={person.id}
+onPointerDown={(e) => onNodePointerDown(e, person.id)}
+onMouseEnter={() => setIsHovered(true)}
+onMouseLeave={() => { if (!linkMenuVisible && !childAddMenuVisible && !editMenuVisible) setIsHovered(false); }}
+>
+<rect x={-hoverRectWidth / 2} y={-hoverRectHeight / 2} width={hoverRectWidth} height={hoverRectHeight} fill="transparent" />
+{ !isInvisible && (
+    <>
+        {isEditing ? (
+        <foreignObject x={-20} y={-65} width={40} height={130}>
+        <textarea
+        ref={nameInputRef}
+        value={name}
+        onChange={handleNameChange}
+        onBlur={handleNameBlur}
+        onKeyDown={handleKeyDown}
+        autoFocus
+        className="name-input-vertical"
+        style={{ height: '120px', ...personStyles }}
+        />
+        </foreignObject>
+        ) : (
+        <g className="person-node-name-group" onClick={handleNameClick}>
+        <rect x={-rectWidth / 2} y={-rectHeight / 2} width={rectWidth} height={rectHeight} fill={person.boxColor || '#ffffff'} rx="4" />
+        <text textAnchor="middle" dominantBaseline="central" style={{ writingMode: 'vertical-rl', ...personStyles }} x="-1">{person.name}</text>
+        </g>
+        )}
+    </>
+)}
+{(isHovered || lineDrawingState.active) && !isEditing && (
+<>
+<path d={`M 0 ${-dynamicArrowOffsetY} l ${-ARROW_SIZE/2} ${ARROW_SIZE/2} l ${ARROW_SIZE} 0 z`} className="arrow-button" onClick={handleUpArrowClick} />
+<path d={`M 0 ${dynamicArrowOffsetY} l ${-ARROW_SIZE/2} ${-ARROW_SIZE/2} l ${ARROW_SIZE} 0 z`} className="arrow-button" onClick={handleDownArrowClick} />
+{ isHovered && !lineDrawingState.active && (
+    <>
+        <path d={`M ${-ARROW_OFFSET_X} 0 l ${ARROW_SIZE/2} ${-ARROW_SIZE/2} l 0 ${ARROW_SIZE} z`} className="arrow-button" onClick={(e) => { e.stopPropagation(); onAddPerson({ person, type: 'spouse_left' }); }} />
+        <path d={`M ${ARROW_OFFSET_X} 0 l ${-ARROW_SIZE/2} ${-ARROW_SIZE/2} l 0 ${ARROW_SIZE} z`} className="arrow-button" onClick={(e) => { e.stopPropagation(); onAddPerson({ person, type: 'spouse_right' }); }} />
+        <g transform={`translate(${-SIBLING_ARROW_OFFSET_X}, ${-dynamicArrowOffsetY + 5})`}><path transform="rotate(45)" d={`M 0 0 l ${ARROW_SIZE/2} ${-ARROW_SIZE/2} l 0 ${ARROW_SIZE} z`} className="arrow-button" onClick={(e) => { e.stopPropagation(); onAddPerson({ person, type: 'add_sibling_left' }); }} /></g>
+        <g transform={`translate(${SIBLING_ARROW_OFFSET_X}, ${-dynamicArrowOffsetY + 5})`}><path transform="rotate(-45)" d={`M 0 0 l ${-ARROW_SIZE/2} ${-ARROW_SIZE/2} l 0 ${ARROW_SIZE} z`} className="arrow-button" onClick={(e) => { e.stopPropagation(); onAddPerson({ person, type: 'add_sibling_right' }); }} /></g>
+        <g className="edit-button" transform={`translate(${BUTTON_OFFSET_X}, ${dynamicArrowOffsetY - 5})`} onClick={handleEditButtonClick}><circle r="10" /><text x="-7" y="5" fill="white" fontSize="14">✏️</text></g>
+        <g className="link-button" transform={`translate(${-BUTTON_OFFSET_X}, ${dynamicArrowOffsetY - 5})`} onClick={handleLinkButtonClick}><circle r="10" /><text x="-6" y="5" fill="white" fontSize="16">🔗</text></g>
+    </>
+)}
+</>
+)}
+{linkMenuVisible && (
+<foreignObject x={-100} y={dynamicArrowOffsetY} width="160" height="180">
+<div className="link-menu" onMouseLeave={() => setLinkMenuVisible(false)}>
+<button onClick={() => { onStartLink(person.id, 'spouse'); setLinkMenuVisible(false); }}>配偶者としてリンク</button>
+<button onClick={() => { onStartLink(person.id, 'parent'); setLinkMenuVisible(false); }}>親としてリンク</button>
+<button onClick={() => { onStartLink(person.id, 'child'); setLinkMenuVisible(false); }}>子としてリンク</button>
+<button onClick={() => { onStartLink(person.id, 'sibling'); setLinkMenuVisible(false); }}>兄弟姉妹としてリンク</button>
+</div>
+</foreignObject>
+)}
+{childAddMenuVisible && (
+<foreignObject x="-70" y={`${dynamicArrowOffsetY + ARROW_SIZE / 2 + 5}`} width="140" height={40 + spouses.length * 30}>
+<div className="child-add-menu" onMouseLeave={() => setChildAddMenuVisible(false)}>
+<button onClick={() => { onAddPerson({ person, type: 'child', parentIds: [person.id] }); setChildAddMenuVisible(false); }}>{person.name}の子</button>
+{spouses.map(spouse => (
+<button key={spouse.id} onClick={() => { onAddPerson({ person, type: 'child', parentIds: [person.id, spouse.id].sort((a,b) => a - b) }); setChildAddMenuVisible(false); }}>{person.name}と{spouse.name}の子</button>
+))}
+</div>
+</foreignObject>
+)}
+{editMenuVisible && (
+<foreignObject x={25} y={-80} width="160" height="300">
+<div className="edit-menu">
+    <div className="edit-menu-section">
+        <label>フォント:</label>
+        <select
+          value={person.fontFamily || 'sans-serif'}
+          onChange={e => onUpdatePersonStyle(person.id, { fontFamily: e.target.value })}
+        >
+          {FONT_OPTIONS.map(font => (
+            <option key={font.value} value={font.value}>
+              {font.label}
+            </option>
+          ))}
+        </select>
+    </div>
+    <div className="edit-menu-section">
+        <label>文字色: <input type="color" value={person.textColor || '#333333'} onChange={e => onUpdatePersonStyle(person.id, { textColor: e.target.value })} /></label>
+        <label>ボックス色: <input type="color" value={person.boxColor || '#ffffff'} onChange={e => onUpdatePersonStyle(person.id, { boxColor: e.target.value })} /></label>
+    </div>
+    <div className="edit-menu-section">
+        <label>太字: <input type="checkbox" checked={person.isBold} onChange={e => onUpdatePersonStyle(person.id, { isBold: e.target.checked })} /></label>
+        <label>斜体: <input type="checkbox" checked={person.isItalic} onChange={e => onUpdatePersonStyle(person.id, { isItalic: e.target.checked })} /></label>
+    </div>
+    <hr />
+    <button onClick={handleEditTitleClick}>肩書きを編集</button>
+    <hr />
+    <button className="delete-button" onClick={() => { onDeletePerson(person.id); setEditMenuVisible(false); }}>この人物を消去</button>
+</div>
+</foreignObject>
+)}
+{ (person.title || isEditingTitle) &&
+    <g transform={`translate(${rectWidth / 2 + 8}, ${-rectHeight / 2})`} style={{ cursor: 'text' }} onPointerDown={e => e.stopPropagation()}>
+        {isEditingTitle ? (
+            <foreignObject x="0" y="-5" width={titleBoxWidth} height={rectHeight + 10}>
+                <textarea
+                    value={titleText}
+                    onChange={e => setTitleText(e.target.value)}
+                    onBlur={() => { setIsEditingTitle(false); onUpdatePersonTitle(person.id, titleText); }}
+                    autoFocus
+                    className="name-input-vertical"
+                    style={{
+                        fontSize: '12px',
+                        fontWeight: 'normal',
+                        width: '100%',
+                        height: '100%',
+                        border: '1px dashed #999',
+                        padding: '2px 0',
+                        lineHeight: '1.2',
+                    }}
+                />
+            </foreignObject>
+        ) : (
+            <text
+                x="0"
+                y="0"
+                onClick={(e) => { e.stopPropagation(); setTitleText(person.title || ''); setIsEditingTitle(true); }}
+                style={{
+                    writingMode: 'vertical-rl',
+                    textOrientation: 'mixed',
+                    fontSize: '12px',
+                    fill: person.textColor || '#333333',
+                    fontFamily: person.fontFamily || 'sans-serif',
+                }}
+                xmlSpace="preserve"
+            >
+                {person.title}
+            </text>
+        )}
+    </g>
+}
+</g>
+);
+};
+
+const App = () => {
+    // ===== ここから共同編集のための修正を加えています =====
+
+    const defaultPersonStyle = { boxColor: '#ffffff', textColor: '#333333', isBold: false, isItalic: false, fontFamily: 'sans-serif', title: '' };
+    
+    // 1. useHistoryをuseStateに変更し、サーバーと通信する仕組みを追加
+    const [state, setState] = useState({ people: [], relationships: [] });
+    const { people, relationships } = state;
+    const socketRef = useRef(null);
+
+    const emitStateUpdate = useCallback((newState) => {
+        if (socketRef.current) {
+            socketRef.current.emit('update-state', newState);
+        }
+    }, []);
+
+    const updateStateAndEmit = (newState) => {
+        setState(newState);
+        emitStateUpdate(newState);
+    };
+
+    useEffect(() => {
+        const socket = io("http://localhost:4000");
+        socketRef.current = socket;
+
+        socket.on('connect', () => {
+            console.log("サーバーに接続しました");
+        });
+        
+        socket.on('initial-state', (initialState) => {
+            console.log("初期データを受信しました");
+            setState(initialState);
+        });
+
+        socket.on('state-updated', (updatedState) => {
+            console.log("データが更新されました");
+            const isDragging = gesture.current.type.startsWith('dragging_');
+            if(!isDragging) { // ドラッグ中は他人の更新を無視してコンフリクトを避ける
+                setState(updatedState);
+            }
+        });
+
+        return () => {
+            socket.disconnect();
+        };
+    }, []);
+
+    // 2. Undo/Redo機能を無効化
+    const undo = () => { /* 共同編集モードでは無効 */ };
+    const redo = () => { /* 共同編集モードでは無効 */ };
+    const canUndo = false;
+    const canRedo = false;
+
+    // ===== ここまでが共同編集のための主要な修正です =====
+
+    const [linkingState, setLinkingState] = useState({ active: false, sourceId: null, type: null });
+    const [viewBox, setViewBox] = useState({ x: 0, y: 0, width: 1, height: 1 });
+    const editorRef = useRef();
+    const fileInputRef = useRef(null);
+    const gesture = useRef({ type: 'idle', startX: 0, startY: 0, draggedNodeId: null, dragOffset: { x: 0, y: 0 }, draggedRelId: null, startHandlePos: 0, startPositions: new Map(), startRelationshipPositions: new Map() });
+    const [guides, setGuides] = useState([]);
+    const [lineDrawingState, setLineDrawingState] = useState({ active: false, step: 'start', startPoint: null });
+    const [statusMessage, setStatusMessage] = useState(null);
+    const [selectedItems, setSelectedItems] = useState({ people: new Set(), relationships: new Set() });
+    const [lassoState, setLassoState] = useState({ active: false, start: { x: 0, y: 0 }, end: { x: 0, y: 0 } });
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [highlightedPersonId, setHighlightedPersonId] = useState(null);
+
+    const findPersonById = useCallback((id) => people.find(p => p.id === id), [people]);
+
+    const bringToFront = useCallback((personId) => {
+        const personToMove = people.find(p => p.id === personId);
+        if (!personToMove) return;
+        const otherPeople = people.filter(p => p.id !== personId);
+        setState(prevState => ({ ...prevState, people: [...otherPeople, personToMove] }));
+    }, [people]);
+
+    const nodeLayouts = useMemo(() => {
+        const FONT_SIZE = 16, PADDING = 4;
+        const layouts = new Map();
+        for (const person of people) {
+            const defaultNameHeight = (Math.max(person.name.length, 4) || 4) * FONT_SIZE + PADDING * 2;
+            layouts.set(person.id, { rectHeight: defaultNameHeight });
+        }
+        return layouts;
+    }, [people]);
+
+    const getNodeHeight = useCallback((person) => {
+        if (!person) return 60;
+        if (person.name === 'eee') return 0;
+        const layout = nodeLayouts.get(person.id);
+        return layout ? layout.rectHeight : ((person.name.length || 1) * 16 + 8);
+    }, [nodeLayouts]);
+
+    const getSpousesOf = useCallback((personId) => {
+        const spouseIds = relationships
+            .filter(r => r.type === 'spouse' && (r.sourceId === personId || r.targetId === personId))
+            .map(r => (r.sourceId === personId ? r.targetId : r.sourceId));
+        return spouseIds.map(id => findPersonById(id)).filter(Boolean);
+    }, [relationships, findPersonById]);
+
+    const allSnapTargets = useMemo(() => {
+        const targets = { h: [], v: [] };
+        people.forEach(p => {
+            const height = getNodeHeight(p);
+            const top = p.y - height / 2;
+            const bottom = p.y + height / 2;
+            targets.v.push({ value: p.x });
+            targets.h.push({ value: top });
+            targets.h.push({ value: p.y });
+            targets.h.push({ value: bottom });
+        });
+        relationships.forEach(rel => {
+            if (rel.type === 'spouse' && rel.lineY) { targets.h.push({ value: rel.lineY }); } 
+            else if (rel.type === 'sibling-group' && rel.lineY) { targets.h.push({ value: rel.lineY }); } 
+            else if (rel.type === 'parent-child') {
+                if (rel.parents?.length === 1 && rel.midY) { targets.h.push({ value: rel.midY }); } 
+                else if (rel.parents?.length === 2) {
+                    if (rel.childConnectorX) targets.v.push({ value: rel.childConnectorX });
+                    if (rel.connectionMidY) targets.h.push({ value: rel.connectionMidY });
+                }
+            }
+        });
+        return targets;
+    }, [people, relationships, getNodeHeight]);
+
+    const horizontalSegments = useMemo(() => {
+        const segments = [];
+        relationships.forEach(rel => {
+            if (rel.type === 'spouse') {
+                const source = findPersonById(rel.sourceId);
+                const target = findPersonById(rel.targetId);
+                if (source && target && rel.lineY) {
+                    const SPOUSE_LINE_OFFSET = 3;
+                    segments.push({ y: rel.lineY - SPOUSE_LINE_OFFSET, x1: Math.min(source.x, target.x), x2: Math.max(source.x, target.x), ownerId: rel.id });
+                    segments.push({ y: rel.lineY + SPOUSE_LINE_OFFSET, x1: Math.min(source.x, target.x), x2: Math.max(source.x, target.x), ownerId: rel.id });
+                }
+            } else if (rel.type === 'sibling-group') {
+                const groupMembers = people.filter(p => p.siblingGroupId === rel.groupId);
+                if (groupMembers.length > 1 && rel.lineY) {
+                    const xCoords = groupMembers.map(p => p.x);
+                    segments.push({ y: rel.lineY, x1: Math.min(...xCoords), x2: Math.max(...xCoords), ownerId: rel.id });
+                }
+            } else if (rel.type === 'parent-child') {
+                if (rel.parents?.length === 1 && rel.midY) {
+                    const parent = findPersonById(rel.parents[0]);
+                    const child = findPersonById(rel.childId);
+                    if (parent && child) {
+                        segments.push({ y: rel.midY, x1: Math.min(parent.x, child.x), x2: Math.max(parent.x, child.x), ownerId: rel.id });
+                    }
+                } else if (rel.parents?.length === 2 && rel.connectionMidY) {
+                    const child = findPersonById(rel.childId);
+                    if (child && rel.childConnectorX) {
+                        segments.push({ y: rel.connectionMidY, x1: Math.min(rel.childConnectorX, child.x), x2: Math.max(rel.childConnectorX, child.x), ownerId: rel.id });
+                    }
+                }
+            }
+        });
+        return segments;
+    }, [people, relationships, findPersonById]);
+
+    const VerticalLineWithBridges = ({ x, y1, y2, ownerId, className }) => {
+        const ARC_RADIUS = 12;
+        const topY = Math.min(y1, y2);
+        const bottomY = Math.max(y1, y2);
+
+        const intersections = horizontalSegments.filter(h => h.ownerId !== ownerId && h.y > topY && h.y < bottomY && x > h.x1 && x < h.x2).sort((a, b) => a.y - b.y);
+
+        if (intersections.length === 0) {
+            return <line x1={x} y1={y1} x2={x} y2={y2} className={className} />;
+        }
+
+        const intersectionGroups = [];
+        if (intersections.length > 0) {
+            let currentGroup = [intersections[0]];
+            for (let i = 1; i < intersections.length; i++) {
+                if (intersections[i].y - currentGroup[currentGroup.length - 1].y < ARC_RADIUS * 2) {
+                    currentGroup.push(intersections[i]);
+                } else {
+                    intersectionGroups.push(currentGroup);
+                    currentGroup = [intersections[i]];
+                }
+            }
+            intersectionGroups.push(currentGroup);
+        }
+
+        let d = `M ${x},${y1}`;
+        const sweepFlag = 1;
+
+        intersectionGroups.forEach(group => {
+            const firstYInGroup = group[0].y;
+            const lastYInGroup = group[group.length - 1].y;
+            const bridgeStartY = firstYInGroup - ARC_RADIUS;
+            const bridgeEndY = lastYInGroup + ARC_RADIUS;
+            const rx = ARC_RADIUS;
+            const ry = (bridgeEndY - bridgeStartY) / 2;
+            d += ` L ${x},${bridgeStartY}`;
+            d += ` A ${rx},${ry} 0 0,${sweepFlag} ${x},${bridgeEndY}`;
+        });
+
+        d += ` L ${x},${y2}`;
+        return <path d={d} className={className} />;
+    };
+
+    useEffect(() => {
+        if (editorRef.current) {
+            const editorRect = editorRef.current.getBoundingClientRect();
+            setViewBox({ x: 400 - editorRect.width / 2, y: 300 - editorRect.height / 2, width: editorRect.width, height: editorRect.height });
+        }
+    }, []);
+
+    const getSvgPoint = useCallback((clientX, clientY) => {
+        if (!editorRef.current) return { x: 0, y: 0 };
+        const editorRect = editorRef.current.getBoundingClientRect();
+        return {
+            x: viewBox.x + (clientX - editorRect.left) * (viewBox.width / editorRect.width),
+            y: viewBox.y + (clientY - editorRect.top) * (viewBox.height / editorRect.height)
+        };
+    }, [viewBox]);
+
+    const startLink = (sourceId, type) => {
+        setLineDrawingState({ active: false, step: 'start', startPoint: null });
+        setLinkingState({ active: true, sourceId: sourceId, type: type });
+    };
+    const cancelLink = () => setLinkingState({ active: false, sourceId: null, type: null });
+
+    const handleNodeClick = (targetId) => {
+        if (gesture.current.type === 'dragging_node' || !linkingState.active || linkingState.sourceId === targetId) {
+            if (linkingState.active) cancelLink();
+            return;
+        }
+        const { sourceId, type } = linkingState;
+        
+        let newRels = [...relationships];
+        let newPeople = [...people];
+        
+        if (type === 'spouse') {
+            const exists = relationships.some(r => r.type === 'spouse' && ((r.sourceId === sourceId && r.targetId === targetId) || (r.sourceId === targetId && r.targetId === sourceId)));
+            if (exists) { cancelLink(); return; }
+            const source = findPersonById(sourceId);
+            const target = findPersonById(targetId);
+            const initialLineY = (source.y + target.y) / 2;
+            newRels.push({ id: `rel_${Date.now()}`, type: 'spouse', sourceId, targetId, lineY: initialLineY });
+        } else if (type === 'parent') {
+            newRels.push({ id: `rel_${Date.now()}`, type: 'parent-child', parents: [targetId], childId: sourceId, midY: (findPersonById(targetId).y + findPersonById(sourceId).y) / 2 });
+        } else if (type === 'child') {
+            const parents = [sourceId];
+            const child = findPersonById(targetId);
+            newRels.push({ id: `rel_${Date.now()}`, type: 'parent-child', parents: parents, childId: targetId, childConnectorX: null, midY: (findPersonById(parents[0]).y + child.y) / 2, connectionMidY: child.y - getNodeHeight(child)/2 - 20, });
+        } else if (type === 'sibling') {
+            const sourcePerson = findPersonById(sourceId);
+            const targetPerson = findPersonById(targetId);
+            if (!sourcePerson || !targetPerson) { cancelLink(); return; }
+            const groupIdsToMerge = new Set();
+            if (sourcePerson.siblingGroupId) groupIdsToMerge.add(sourcePerson.siblingGroupId);
+            if (targetPerson.siblingGroupId) groupIdsToMerge.add(targetPerson.siblingGroupId);
+
+            let finalGroupId = sourcePerson.siblingGroupId || targetPerson.siblingGroupId || `sg_${Date.now()}`;
+
+            newPeople = people.map(p => {
+                if (p.id === sourceId || p.id === targetId || groupIdsToMerge.has(p.siblingGroupId)) {
+                    return { ...p, siblingGroupId: finalGroupId };
+                }
+                return p;
+            });
+
+            const otherGroupRels = relationships.filter(r => r.type === 'sibling-group' && groupIdsToMerge.has(r.groupId) && r.groupId !== finalGroupId);
+            newRels = relationships.filter(r => !otherGroupRels.map(og => og.id).includes(r.id));
+            const existingFinalRel = newRels.find(r => r.type === 'sibling-group' && r.groupId === finalGroupId);
+            if (!existingFinalRel) {
+                const initialSiblingLineY = Math.min(sourcePerson.y, targetPerson.y) - 80;
+                newRels = [...newRels, { id: `sgroup_rel_${Date.now()}`, type: 'sibling-group', groupId: finalGroupId, lineY: initialSiblingLineY }];
+            }
+        }
+        
+        updateStateAndEmit({ people: newPeople, relationships: newRels });
+        cancelLink();
+    };
+
+    const handleWheel = (e) => {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            if (!editorRef.current) return;
+            const zoomFactor = 1.05;
+            const { x: mouseSvgX, y: mouseSvgY } = getSvgPoint(e.clientX, e.clientY);
+            const newWidth = e.deltaY < 0 ? viewBox.width / zoomFactor : viewBox.width * zoomFactor;
+            const newHeight = e.deltaY < 0 ? viewBox.height / zoomFactor : viewBox.height * zoomFactor;
+            const newX = mouseSvgX - (mouseSvgX - viewBox.x) * (newWidth / viewBox.width);
+            const newY = mouseSvgY - (mouseSvgY - viewBox.y) * (newHeight / viewBox.height);
+            setViewBox({ x: newX, y: newY, width: newWidth, height: newHeight });
+        }
+    };
+
+    const onPointerDown = (e) => {
+        const isBackgroundClick = e.target === e.currentTarget || e.target.tagName === 'svg' || e.target.closest('svg') === e.target;
+        if (!e.target.closest('.search-container')) { setSearchResults([]); }
+        if (lineDrawingState.active) { if (isBackgroundClick) { handleCancelLineDrawing(); } return; }
+
+        const nodeElement = e.target.closest('.person-node');
+        if (e.shiftKey) { e.stopPropagation(); editorRef.current.setPointerCapture(e.pointerId); const startPoint = getSvgPoint(e.clientX, e.clientY); setLassoState({ active: true, start: startPoint, end: startPoint }); gesture.current.type = 'lassoing'; return; }
+        if (nodeElement) { setHighlightedPersonId(null); const nodeId = parseInt(nodeElement.dataset.personId, 10); if (selectedItems.people.has(nodeId)) { e.stopPropagation(); editorRef.current.setPointerCapture(e.pointerId); gesture.current.type = 'dragging_selection'; gesture.current.startX = e.clientX; gesture.current.startY = e.clientY; gesture.current.startPositions = new Map(people.map(p => [p.id, { x: p.x, y: p.y }])); const startRels = new Map(); relationships.forEach(rel => { startRels.set(rel.id, { lineY: rel.lineY, midY: rel.midY, connectionMidY: rel.connectionMidY, childConnectorX: rel.childConnectorX }); }); gesture.current.startRelationshipPositions = startRels; return; } }
+        if (isBackgroundClick && !nodeElement && !e.target.closest('.line-handle')) { setSelectedItems({ people: new Set(), relationships: new Set() }); setHighlightedPersonId(null); }
+        const targetDataset = e.target.dataset; const targetClasses = e.target.classList; let gestureType = 'panning'; let startPos = 0; const relId = targetDataset.relId; const rel = relationships.find(r => r.id === relId);
+        if (targetClasses.contains('spouse-line-handle')) { gestureType = 'dragging_spouse_line'; if(rel) startPos = rel.lineY; }
+        else if (targetClasses.contains('child-connector-handle')) { gestureType = 'dragging_child_connector'; if(rel) startPos = rel.childConnectorX; }
+        else if (targetClasses.contains('single-parent-line-handle')) { gestureType = 'dragging_single_parent_line'; if(rel) startPos = rel.midY; }
+        else if (targetClasses.contains('sibling-line-handle')) { gestureType = 'dragging_sibling_line'; if(rel) startPos = rel.lineY; }
+        else if (targetClasses.contains('two-parent-child-mid-line-handle')) { gestureType = 'dragging_two_parent_child_mid_line'; if(rel) startPos = rel.connectionMidY; }
+        else if (nodeElement) { const nodeId = parseInt(nodeElement.dataset.personId, 10); if (!selectedItems.people.has(nodeId)) { setSelectedItems({ people: new Set(), relationships: new Set() }); gesture.current.type = 'pending_node_drag'; gesture.current.startX = e.clientX; gesture.current.startY = e.clientY; gesture.current.draggedNodeId = nodeId; return; } }
+        if (gestureType !== 'panning') e.stopPropagation(); editorRef.current.setPointerCapture(e.pointerId); gesture.current.type = gestureType; gesture.current.draggedRelId = relId; gesture.current.startX = e.clientX; gesture.current.startY = e.clientY; gesture.current.startHandlePos = startPos;
+    };
+
+    const onPointerMove = (e) => {
+        const SNAP_THRESHOLD = 10;
+
+        if (gesture.current.type === 'lassoing') {
+            const currentPoint = getSvgPoint(e.clientX, e.clientY);
+            setLassoState(prev => ({ ...prev, end: currentPoint }));
+            return;
+        }
+        if (gesture.current.type === 'dragging_selection') {
+            const startSvgPoint = getSvgPoint(gesture.current.startX, gesture.current.startY);
+            const currentSvgPoint = getSvgPoint(e.clientX, e.clientY);
+            const dx = currentSvgPoint.x - startSvgPoint.x;
+            const dy = currentSvgPoint.y - startSvgPoint.y;
+
+            const newPeople = state.people.map(p => {
+                if (selectedItems.people.has(p.id)) {
+                    const startPos = gesture.current.startPositions.get(p.id);
+                    return { ...p, x: startPos.x + dx, y: startPos.y + dy };
+                }
+                return p;
+            });
+            const newRelationships = state.relationships.map(rel => {
+                if (selectedItems.relationships.has(rel.id)) {
+                    const startRelPos = gesture.current.startRelationshipPositions.get(rel.id);
+                    const newRel = { ...rel };
+                    if (startRelPos.lineY !== undefined) newRel.lineY = startRelPos.lineY + dy;
+                    if (startRelPos.midY !== undefined) newRel.midY = startRelPos.midY + dy;
+                    if (startRelPos.connectionMidY !== undefined) newRel.connectionMidY = startRelPos.connectionMidY + dy;
+                    if (startRelPos.childConnectorX !== undefined) newRel.childConnectorX = startRelPos.childConnectorX + dx;
+                    return newRel;
+                }
+                return rel;
+            });
+            setState({ people: newPeople, relationships: newRelationships });
+            setGuides([]);
+            return;
+        } else if (lineDrawingState.active) {
+            return;
+        } else if (gesture.current.type === 'pending_node_drag') {
+            const dx = e.clientX - gesture.current.startX;
+            const dy = e.clientY - gesture.current.startY;
+            if (dx * dx + dy * dy > 5 * 5) {
+                editorRef.current.setPointerCapture(e.pointerId);
+                gesture.current.type = 'dragging_node';
+                const person = findPersonById(gesture.current.draggedNodeId);
+                const startSvgPoint = getSvgPoint(gesture.current.startX, gesture.current.startY);
+                if (person) {
+                    gesture.current.dragOffset = { x: person.x - startSvgPoint.x, y: person.y - startSvgPoint.y };
+                }
+            }
+        } else if (gesture.current.type === 'dragging_node') {
+            const currentSvgPoint = getSvgPoint(e.clientX, e.clientY);
+            let newX = currentSvgPoint.x + gesture.current.dragOffset.x;
+            let newY = currentSvgPoint.y + gesture.current.dragOffset.y;
+            const newGuides = [];
+            const draggedNodeId = gesture.current.draggedNodeId;
+            const draggedPerson = findPersonById(draggedNodeId);
+            if (!draggedPerson) return;
+            const draggedNodeHeight = getNodeHeight(draggedPerson);
+            const draggedNodeTop = newY - draggedNodeHeight / 2;
+            const draggedNodeBottom = newY + draggedNodeHeight / 2;
+            for (const target of allSnapTargets.v) { if (Math.abs(newX - target.value) < SNAP_THRESHOLD) { newX = target.value; newGuides.push({ type: 'v', x: newX, y1: viewBox.y, y2: viewBox.y + viewBox.height }); break; } }
+            let ySnapped = false;
+            for (const target of allSnapTargets.h) { if (Math.abs(draggedNodeTop - target.value) < SNAP_THRESHOLD) { newY = target.value + draggedNodeHeight / 2; ySnapped = true; } else if (Math.abs(newY - target.value) < SNAP_THRESHOLD) { newY = target.value; ySnapped = true; } else if (Math.abs(draggedNodeBottom - target.value) < SNAP_THRESHOLD) { newY = target.value - draggedNodeHeight / 2; ySnapped = true; } if(ySnapped) { newGuides.push({ type: 'h', y: target.value, x1: viewBox.x, x2: viewBox.x + viewBox.width }); break; } }
+            setGuides(newGuides);
+            const newPeople = state.people.map(p => (p.id === draggedNodeId ? { ...p, x: newX, y: newY } : p));
+            setState({ ...state, people: newPeople });
+        } else if (gesture.current.type.startsWith('dragging_')) {
+            const currentSvgPoint = getSvgPoint(e.clientX, e.clientY);
+            const startSvgPoint = getSvgPoint(gesture.current.startX, gesture.current.startY);
+            const rel = relationships.find(r => r.id === gesture.current.draggedRelId);
+            if (!rel) return;
+            const newGuides = [];
+            let updatedProp = {};
+            if (['dragging_spouse_line', 'dragging_single_parent_line', 'dragging_sibling_line', 'dragging_two_parent_child_mid_line'].includes(gesture.current.type)) {
+                let newRawY = gesture.current.startHandlePos + (currentSvgPoint.y - startSvgPoint.y);
+                for (const target of allSnapTargets.h) { if (Math.abs(newRawY - target.value) < SNAP_THRESHOLD) { newRawY = target.value; newGuides.push({ type: 'h', y: newRawY, x1: viewBox.x, x2: viewBox.x + viewBox.width }); break; } }
+                const propName = { 'dragging_spouse_line': 'lineY', 'dragging_single_parent_line': 'midY', 'dragging_sibling_line': 'lineY', 'dragging_two_parent_child_mid_line': 'connectionMidY'}[gesture.current.type];
+                updatedProp[propName] = newRawY;
+            } else if (gesture.current.type === 'dragging_child_connector') {
+                let newRawX = gesture.current.startHandlePos + (currentSvgPoint.x - startSvgPoint.x);
+                for (const target of allSnapTargets.v) { if (Math.abs(newRawX - target.value) < SNAP_THRESHOLD) { newRawX = target.value; newGuides.push({ type: 'v', x: newRawX, y1: viewBox.y, y2: viewBox.y + viewBox.height }); break; } }
+                updatedProp['childConnectorX'] = newRawX;
+            }
+            if (Object.keys(updatedProp).length > 0) {
+                const newRels = state.relationships.map(r => r.id === gesture.current.draggedRelId ? { ...r, ...updatedProp } : r);
+                setState({ ...state, relationships: newRels });
+            }
+            setGuides(newGuides);
+        } else if (gesture.current.type === 'panning') {
+            const editorRect = editorRef.current.getBoundingClientRect();
+            const moveX = e.movementX * (viewBox.width / editorRect.width);
+            const moveY = e.movementY * (viewBox.height / editorRect.height);
+            setViewBox(prev => ({ ...prev, x: prev.x - moveX, y: prev.y - moveY }));
+        }
+    };
+
+    const onPointerUp = (e) => {
+        if (gesture.current.type.startsWith('dragging_')) {
+            emitStateUpdate(state);
+        }
+
+        if (gesture.current.type === 'lassoing') {
+            selectItemsInLasso(e.shiftKey);
+            setLassoState({ active: false, start: { x: 0, y: 0 }, end: { x: 0, y: 0 } });
+        }
+        
+        if (editorRef.current.hasPointerCapture(e.pointerId)) {
+            editorRef.current.releasePointerCapture(e.pointerId);
+        }
+        gesture.current.type = 'idle';
+        setGuides([]);
+    };
+    
+    const selectItemsInLasso = (isShiftPressed) => {
+        const { start, end } = lassoState;
+        if (Math.abs(start.x - end.x) < 5 && Math.abs(start.y - end.y) < 5) {
+            if (!isShiftPressed) setSelectedItems({ people: new Set(), relationships: new Set() });
+            return;
+        }
+        const lassoRect = { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(start.x - end.x), height: Math.abs(start.y - end.y) };
+
+        const newlySelectedPeople = new Set();
+        people.forEach(p => {
+            const nodeHeight = getNodeHeight(p);
+            const nodeWidth = 30;
+            const nodeBounds = { x1: p.x - nodeWidth / 2, y1: p.y - nodeHeight / 2, x2: p.x + nodeWidth / 2, y2: p.y + nodeHeight / 2 };
+            if (nodeBounds.x1 >= lassoRect.x && nodeBounds.x2 <= lassoRect.x + lassoRect.width && nodeBounds.y1 >= lassoRect.y && nodeBounds.y2 <= lassoRect.y + lassoRect.height) {
+                newlySelectedPeople.add(p.id);
+            }
+        });
+
+        const finalSelectedPeople = isShiftPressed ? new Set([...selectedItems.people, ...newlySelectedPeople]) : newlySelectedPeople;
+        const finalSelectedRels = new Set(isShiftPressed ? selectedItems.relationships : []);
+
+        relationships.forEach(rel => {
+            let isSelected = false;
+            if (rel.type === 'spouse') { isSelected = finalSelectedPeople.has(rel.sourceId) && finalSelectedPeople.has(rel.targetId); }
+            else if (rel.type === 'parent-child') { isSelected = finalSelectedPeople.has(rel.childId) && rel.parents?.every(pId => finalSelectedPeople.has(pId)); }
+            else if (rel.type === 'sibling-group') { const groupMembers = people.filter(p => p.siblingGroupId === rel.groupId); if (groupMembers.length > 0) isSelected = groupMembers.every(m => finalSelectedPeople.has(m.id)); }
+            if (isSelected) finalSelectedRels.add(rel.id);
+        });
+
+        setSelectedItems({ people: finalSelectedPeople, relationships: finalSelectedRels });
+    };
+
+    const updatePersonName = (id, newName) => {
+        const newPeople = people.map(p => (p.id === id ? { ...p, name: newName } : p));
+        updateStateAndEmit({ ...state, people: newPeople });
+    };
+
+    const updatePersonStyle = (id, newStyles) => {
+        const newPeople = people.map(p => p.id === id ? { ...p, ...newStyles } : p );
+        updateStateAndEmit({ ...state, people: newPeople });
+    };
+
+    const updatePersonTitle = (id, newTitle) => {
+        const newPeople = people.map(p => (p.id === id ? { ...p, title: newTitle } : p));
+        updateStateAndEmit({ ...state, people: newPeople });
+    };
+
+    const deletePerson = (idToDelete) => {
+        const deletedPerson = people.find(p => p.id === idToDelete);
+        const newPeople = people.filter(p => p.id !== idToDelete);
+        let newRels = relationships
+            .filter(rel => rel.sourceId !== idToDelete && rel.targetId !== idToDelete && rel.childId !== idToDelete)
+            .map(rel => {
+                if (rel.parents?.includes(idToDelete)) {
+                    return { ...rel, parents: rel.parents.filter(pId => pId !== idToDelete) };
+                }
+                return rel;
+            });
+
+        if (deletedPerson?.siblingGroupId) {
+            const remainingSiblings = newPeople.filter(p => p.siblingGroupId === deletedPerson.siblingGroupId);
+            if (remainingSiblings.length < 2) {
+                newRels = newRels.filter(r => !(r.type === 'sibling-group' && r.groupId === deletedPerson.siblingGroupId));
+            }
+        }
+        updateStateAndEmit({ people: newPeople, relationships: newRels });
+    };
+    
+    const addPerson = ({ person, type, parentIds = [] }) => {
+        const H_DIST = 200, V_DIST = 150, SIBLING_SPACING = 140;
+        let newPeople = [...people];
+        let newRels = [...relationships];
+        let newPerson = null;
+
+        if (type === 'parent') {
+            newPerson = { id: Date.now(), name: '新しい人物', x: person.x, y: person.y - V_DIST, siblingGroupId: null, ...defaultPersonStyle };
+            newPeople.push(newPerson);
+            if (person.siblingGroupId) {
+                const siblings = people.filter(p => p.siblingGroupId === person.siblingGroupId);
+                const newRelationships = siblings.map(sibling => ({ id: `rel_${Date.now()}_${sibling.id}`, type: 'parent-child', parents: [newPerson.id], childId: sibling.id, midY: (newPerson.y + sibling.y) / 2 }));
+                newRels.push(...newRelationships);
+            } else {
+                newRels.push({ id: `rel_${Date.now()}`, type: 'parent-child', parents: [newPerson.id], childId: person.id, midY: (newPerson.y + person.y) / 2 });
+            }
+        } else if (type === 'add_sibling_left' || type === 'add_sibling_right') {
+            const sourcePerson = findPersonById(person.id);
+            const newPersonX = sourcePerson.x + (type === 'add_sibling_left' ? -SIBLING_SPACING : SIBLING_SPACING);
+            let groupId = sourcePerson.siblingGroupId;
+            const isNewGroup = !groupId;
+            if (isNewGroup) groupId = `sg_${Date.now()}`;
+            newPerson = { id: Date.now(), name: '新しい人物', x: newPersonX, y: sourcePerson.y, siblingGroupId: groupId, ...defaultPersonStyle };
+            
+            newPeople.push(newPerson);
+            if (isNewGroup) {
+                newPeople = newPeople.map(p => p.id === sourcePerson.id ? { ...p, siblingGroupId: groupId } : p);
+            }
+            const parentRel = relationships.find(r => r.type === 'parent-child' && r.childId === sourcePerson.id);
+            if (parentRel) {
+                const newChildRelationship = { id: `rel_${Date.now()}`, type: 'parent-child', parents: parentRel.parents, childId: newPerson.id, };
+                if (parentRel.parents.length === 1) { const parent = findPersonById(parentRel.parents[0]); if (parent) { newChildRelationship.midY = (parent.y + newPerson.y) / 2; }
+                } else if (parentRel.parents.length === 2) { newChildRelationship.childConnectorX = parentRel.childConnectorX; newChildRelationship.connectionMidY = newPerson.y - getNodeHeight(newPerson) / 2 - 20; }
+                newRels.push(newChildRelationship);
+            } else if (isNewGroup) {
+                newRels.push({ id: `sgroup_rel_${Date.now()}`, type: 'sibling-group', groupId: groupId, lineY: sourcePerson.y - 80 });
+            }
+        } else if (type === 'child') {
+            const parents = parentIds.map(id => findPersonById(id)).filter(Boolean);
+            if (parents.length === 0) return;
+            const parentCenterX = parents.reduce((sum, p) => sum + p.x, 0) / parents.length;
+            const parentCenterY = parents.reduce((sum, p) => sum + p.y, 0) / parents.length;
+            newPerson = { id: Date.now(), name: '新しい人物', x: parentCenterX, y: parentCenterY + V_DIST, siblingGroupId: null, ...defaultPersonStyle };
+            const newRel = { id: `rel_${Date.now()}`, type: 'parent-child', parents: parentIds, childId: newPerson.id };
+            if (parents.length === 1) { newRel.midY = (parents[0].y + newPerson.y) / 2;
+            } else { newRel.childConnectorX = parentCenterX; const newPersonHeight = getNodeHeight({ ...newPerson, name: '新しい人物'}); newRel.connectionMidY = newPerson.y - newPersonHeight / 2 - 20; }
+            newPeople.push(newPerson);
+            newRels.push(newRel);
+        } else {
+            let spouseX = person.x;
+            if (type === 'spouse_left') spouseX -= H_DIST;
+            if (type === 'spouse_right') spouseX += H_DIST;
+            newPerson = { id: Date.now(), name: '新しい人物', x: spouseX, y: person.y, siblingGroupId: null, ...defaultPersonStyle };
+            newPeople.push(newPerson);
+            if (type === 'spouse_left') newRels.push({ id: `rel_${Date.now()}`, type: 'spouse', sourceId: newPerson.id, targetId: person.id, lineY: newPerson.y });
+            if (type === 'spouse_right') newRels.push({ id: `rel_${Date.now()}`, type: 'spouse', sourceId: person.id, targetId: newPerson.id, lineY: newPerson.y });
+        }
+        
+        updateStateAndEmit({ people: newPeople, relationships: newRels });
+    };
+
+    const handleSave = () => {
+        try {
+            const dataStr = JSON.stringify(state);
+            const blob = new Blob([dataStr], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `family-tree-${new Date().toISOString().slice(0,10)}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error("Failed to save data:", error);
+            alert("データの保存に失敗しました。");
+        }
+    };
+
+    const handleLoadClick = () => {
+        fileInputRef.current.click();
+    };
+
+    const handleFileChange = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const loadedData = JSON.parse(e.target.result);
+                if (loadedData && loadedData.people && loadedData.relationships) {
+                    const sanitizedPeople = loadedData.people.map(p => ({
+                        ...defaultPersonStyle,
+                        ...p,
+                        title: p.title || ''
+                    }));
+                    updateStateAndEmit({ ...loadedData, people: sanitizedPeople });
+                } else {
+                    alert("無効なファイル形式です。");
+                }
+            } catch (error) {
+                console.error("Failed to parse file:", error);
+                alert("ファイルの読み込みに失敗しました。");
+            }
+        };
+        reader.readAsText(file);
+        event.target.value = null;
+    };
+
+
+    const handleStartLineDrawing = () => {
+        setLinkingState({ active: false, sourceId: null, type: null });
+        setLineDrawingState({ active: true, step: 'start', startPoint: null });
+    };
+    const handleCancelLineDrawing = () => {
+        setLineDrawingState({ active: false, step: 'start', startPoint: null });
+        setStatusMessage(null);
+    };
+    const handlePointSelection = (point) => {
+        if (!lineDrawingState.active) return;
+        if (lineDrawingState.step === 'start') {
+            setLineDrawingState(prev => ({ ...prev, step: 'end', startPoint: point }));
+        } else {
+            createRelationship(lineDrawingState.startPoint, point);
+            handleCancelLineDrawing();
+        }
+    };
+
+    const createRelationship = (start, end) => {
+        const showError = () => { setStatusMessage("その組み合わせは選択できません"); setTimeout(() => setStatusMessage(null), 3000); };
+        let newState = { ...state };
+        let changed = false;
+
+        if (start.type === 'person' && start.position === 'top' && end.type === 'person' && end.position === 'top' && start.id !== end.id) { 
+            handleNodeClick(end.id, { ...linkingState, sourceId: start.id, type: 'sibling' }); return; 
+        }
+        if (start.type === 'person' && start.position === 'top' && end.type === 'person' && end.position === 'bottom' && start.id !== end.id) { 
+            const parent = findPersonById(start.id); const child = findPersonById(end.id); if (!parent || !child) return; 
+            newState.relationships = [...newState.relationships, { id: `rel_${Date.now()}`, type: 'parent-child', parents: [start.id], childId: end.id, midY: (parent.y + child.y) / 2 }];
+            changed = true;
+        }
+        if (start.type === 'person' && start.position === 'bottom' && end.type === 'person' && end.position === 'top' && start.id !== end.id) { 
+            const child = findPersonById(start.id); const parent = findPersonById(end.id); if (!child || !parent) return;
+             newState.relationships = [...newState.relationships, { id: `rel_${Date.now()}`, type: 'parent-child', parents: [end.id], childId: start.id, midY: (parent.y + child.y) / 2 }];
+             changed = true;
+        }
+        const createTwoParentChildRel = (childId, spouseRelId) => {
+            const child = findPersonById(childId); const spouseRel = relationships.find(r => r.id === spouseRelId); if (!child || !spouseRel) return; const parents = [findPersonById(spouseRel.sourceId), findPersonById(spouseRel.targetId)]; if(parents.some(p => !p)) return; if(parents.some(p => p.id === child.id)) return showError();
+            const parentCenterX = parents.reduce((sum, p) => sum + p.x, 0) / parents.length;
+            const newRel = { id: `rel_${Date.now()}`, type: 'parent-child', parents: [parents[0].id, parents[1].id].sort((a,b) => a-b), childId: childId, childConnectorX: parentCenterX, connectionMidY: child.y - getNodeHeight(child) / 2 - 20 };
+            newState.relationships = [...newState.relationships, newRel];
+            changed = true;
+        }
+        if (start.type === 'person' && start.position === 'top' && end.type === 'spouseLine') { createTwoParentChildRel(start.id, end.id); }
+        if (start.type === 'spouseLine' && end.type === 'person' && end.position === 'top') { createTwoParentChildRel(end.id, start.id); }
+        
+        if (changed) {
+            updateStateAndEmit(newState);
+        } else if (!linkingState.active) {
+            showError();
+        }
+    };
+
+    const getStatusText = () => {
+        if (lassoState.active) return "ドラッグして範囲を選択 (Shiftキーで追加選択)";
+        if (selectedItems.people.size > 0) return `${selectedItems.people.size}人、${selectedItems.relationships.size}個の関係を選択中`;
+        if (statusMessage) return statusMessage;
+        if (lineDrawingState.active) {
+            if (lineDrawingState.step === 'start') return "線の始点を選んでください";
+            return "線の終点を選んでください";
+        }
+        if (gesture.current.type.startsWith('dragging')) return "オブジェクトを移動中...";
+        if (!linkingState.active) return "共同編集モード";
+        const sourcePerson = findPersonById(linkingState.sourceId);
+        if (!sourcePerson) return "操作をキャンセルしました";
+        const typeText = {spouse: '配偶者', parent: '親', child: '子', sibling: '兄弟姉妹'}[linkingState.type];
+        return <span><b>{sourcePerson.name}</b> の <b>{typeText}</b> となる人物をクリック (背景クリックでキャンセル)</span>;
+    };
+
+    const focusOnPerson = useCallback((personId) => {
+        const person = findPersonById(personId);
+        if (person) {
+            const newWidth = 1200;
+            const newHeight = 800;
+            setViewBox({
+                x: person.x - newWidth / 2,
+                y: person.y - newHeight / 2,
+                width: newWidth,
+                height: newHeight,
+            });
+            setHighlightedPersonId(personId);
+        }
+    }, [findPersonById]);
+
+    const handleSearchChange = (e) => {
+        const query = e.target.value;
+        setSearchQuery(query);
+        if (query.length > 1) {
+            const results = people
+                .filter(p => p.name.toLowerCase().includes(query.toLowerCase()))
+                .slice(0, 10);
+            setSearchResults(results);
+        } else {
+            setSearchResults([]);
+            if (query.length === 0) {
+                setHighlightedPersonId(null);
+            }
+        }
+    };
+
+    const handleSearchResultClick = (personId) => {
+        focusOnPerson(personId);
+        setSearchQuery('');
+        setSearchResults([]);
+    };
+
+    const SiblingGroupLines = () => {
+        const groups = {};
+        people.forEach(p => {
+            if (p.siblingGroupId) {
+                if (!groups[p.siblingGroupId]) groups[p.siblingGroupId] = [];
+                groups[p.siblingGroupId].push(p);
+            }
+        });
+        return Object.values(groups).map(group => {
+            const hasParents = group.some(member => relationships.some(rel => rel.type === 'parent-child' && rel.childId === member.id && rel.parents?.length > 0));
+            if (group.length < 2 || hasParents) return null;
+            const xCoords = group.map(p => p.x).sort((a,b) => a - b);
+            const minX = xCoords[0];
+            const maxX = xCoords[xCoords.length - 1];
+            const siblingGroupRel = relationships.find(r => r.type === 'sibling-group' && r.groupId === group[0].siblingGroupId);
+            const yPos = siblingGroupRel ? siblingGroupRel.lineY : (Math.min(...group.map(p => p.y)) - 80);
+            const isSelected = siblingGroupRel && selectedItems.relationships.has(siblingGroupRel.id);
+
+            return (
+            <g key={`sg-${group[0].siblingGroupId}`}>
+            <line x1={minX} y1={yPos} x2={maxX} y2={yPos} className={`sibling-line ${isSelected ? 'selected' : ''}`} />
+            {siblingGroupRel && (<line x1={minX} y1={yPos} x2={maxX} y2={yPos} className="sibling-line-handle line-handle" data-rel-id={siblingGroupRel.id} />)}
+            {group.map(p => {
+                const siblingTop = p.y - getNodeHeight(p) / 2;
+                const connectorIsSelected = siblingGroupRel && selectedItems.relationships.has(siblingGroupRel.id);
+                return <VerticalLineWithBridges key={`svl-${p.id}`} x={p.x} y1={siblingTop} y2={yPos} ownerId={siblingGroupRel?.id} className={`sibling-connector ${connectorIsSelected ? 'selected' : ''}`}/>
+            })}
+            </g>
+            )
+        });
+    };
+
+    const { visiblePeople, visibleRelationships } = useMemo(() => {
+        if (!viewBox.width || !viewBox.height) {
+            return { visiblePeople: [], visibleRelationships: [] };
+        }
+        
+        const BUFFER_X = viewBox.width * 0.2;
+        const BUFFER_Y = viewBox.height * 0.2;
+
+        const visibleXStart = viewBox.x - BUFFER_X;
+        const visibleYStart = viewBox.y - BUFFER_Y;
+        const visibleXEnd = viewBox.x + viewBox.width + BUFFER_X;
+        const visibleYEnd = viewBox.y + viewBox.height + BUFFER_Y;
+
+        const visiblePeople = people.filter(p => {
+            return p.x >= visibleXStart && p.x <= visibleXEnd &&
+                   p.y >= visibleYStart && p.y <= visibleYEnd;
+        });
+
+        const visiblePeopleIdSet = new Set(visiblePeople.map(p => p.id));
+        
+        const visibleRelationships = relationships.filter(rel => {
+            if (rel.type === 'spouse') {
+                const isPersonVisible = visiblePeopleIdSet.has(rel.sourceId) || visiblePeopleIdSet.has(rel.targetId);
+                if (isPersonVisible) return true;
+
+                const source = findPersonById(rel.sourceId);
+                const target = findPersonById(rel.targetId);
+                if (!source || !target) return false;
+
+                const lineY = rel.lineY || ((source.y + target.y) / 2);
+                const lineIsVerticallyVisible = lineY >= visibleYStart && lineY <= visibleYEnd;
+                const lineIsHorizontallyVisible = Math.max(source.x, target.x) >= visibleXStart && Math.min(source.x, target.x) <= visibleXEnd;
+
+                return lineIsVerticallyVisible && lineIsHorizontallyVisible;
+            }
+
+            if (rel.type === 'parent-child') {
+                const isPersonVisible = visiblePeopleIdSet.has(rel.childId) || rel.parents?.some(pId => visiblePeopleIdSet.has(pId));
+                if (isPersonVisible) return true;
+
+                const child = findPersonById(rel.childId);
+                const parents = rel.parents?.map(findPersonById).filter(Boolean);
+                if (!child || !parents || parents.length === 0) return false;
+
+                const allNodes = [child, ...parents];
+                const minX = Math.min(...allNodes.map(n => n.x));
+                const maxX = Math.max(...allNodes.map(n => n.x));
+                const minY = Math.min(...allNodes.map(n => n.y));
+                const maxY = Math.max(...allNodes.map(n => n.y));
+
+                const boxIntersectsViewport = maxX >= visibleXStart && minX <= visibleXEnd && maxY >= visibleYStart && minY <= visibleYEnd;
+                return boxIntersectsViewport;
+            }
+
+            if (rel.type === 'sibling-group') {
+                const groupMembers = people.filter(p => p.siblingGroupId === rel.groupId);
+                if (groupMembers.length === 0) return false;
+                
+                const isPersonVisible = groupMembers.some(member => visiblePeopleIdSet.has(member.id));
+                if (isPersonVisible) return true;
+
+                const minX = Math.min(...groupMembers.map(p => p.x));
+                const maxX = Math.max(...groupMembers.map(p => p.x));
+                const minY = Math.min(...groupMembers.map(p => p.y));
+                const maxY = Math.max(...groupMembers.map(p => p.y));
+                const lineY = rel.lineY || minY - 80;
+
+                const overallMinY = Math.min(minY, lineY);
+                const overallMaxY = Math.max(maxY, lineY);
+
+                const boxIntersectsViewport = maxX >= visibleXStart && minX <= visibleXEnd && overallMaxY >= visibleYStart && overallMinY <= visibleYEnd;
+                return boxIntersectsViewport;
+            }
+            
+            return false;
+        });
+        
+        return { visiblePeople, visibleRelationships };
+
+    }, [people, relationships, viewBox, findPersonById]);
+
+return (
+<>
+<div className="main-toolbar">
+    <div className="toolbar-group">
+        <button className="undo-redo-button" onClick={undo} disabled={!canUndo} title="元に戻す">↩️</button>
+        <button className="undo-redo-button" onClick={redo} disabled={!canRedo} title="やり直し">↪️</button>
+    </div>
+    <div className="toolbar-group">
+        <button onClick={handleSave}>保存</button>
+        <button onClick={handleLoadClick}>読込</button>
+        <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            style={{ display: 'none' }}
+            accept="application/json"
+        />
+    </div>
+    <div className="toolbar-group search-container">
+        <input 
+            type="text" 
+            className="search-input"
+            placeholder="名前で検索..."
+            value={searchQuery}
+            onChange={handleSearchChange}
+        />
+        {searchResults.length > 0 && (
+            <div className="search-results">
+                {searchResults.map(person => (
+                    <button key={person.id} onClick={() => handleSearchResultClick(person.id)}>
+                        {person.name}
+                    </button>
+                ))}
+            </div>
+        )}
+    </div>
+</div>
+<div className="status-bar">
+    <span className="status-bar-text">{getStatusText()}</span>
+    <div className="status-bar-controls">
+        <span>総人数: {people.length}人</span>
+        <button onClick={handleStartLineDrawing} disabled={linkingState.active || lineDrawingState.active}>線を追加</button>
+        {lineDrawingState.active && <button onClick={handleCancelLineDrawing}>キャンセル</button>}
+    </div>
+</div>
+<div
+className={`editor-container ${linkingState.active ? 'linking-mode' : ''} ${lineDrawingState.active ? 'line-drawing-mode' : ''}`}
+ref={editorRef}
+onPointerDown={onPointerDown}
+onPointerMove={onPointerMove}
+onPointerUp={onPointerUp}
+onPointerCancel={onPointerUp}
+onWheel={handleWheel}
+>
+<svg style={{ width: '100%', height: '100%' }} viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}>
+<SiblingGroupLines />
+{visibleRelationships.map((rel) => {
+const isSelected = selectedItems.relationships.has(rel.id);
+const SPOUSE_LINE_OFFSET = 3;
+if (rel.type === 'spouse') {
+const source = findPersonById(rel.sourceId);
+const target = findPersonById(rel.targetId);
+if (!source || !target) return null;
+const currentLineY = rel.lineY || ((source.y + target.y) / 2);
+const midX = (source.x + target.x) / 2;
+return (
+<g key={rel.id}>
+<line x1={source.x} y1={currentLineY} x2={target.x} y2={currentLineY} className="spouse-line-handle line-handle" data-rel-id={rel.id} />
+<line x1={source.x} y1={currentLineY - SPOUSE_LINE_OFFSET} x2={target.x} y2={currentLineY - SPOUSE_LINE_OFFSET} className={`spouse-line ${isSelected ? 'selected' : ''}`} />
+<line x1={source.x} y1={currentLineY + SPOUSE_LINE_OFFSET} x2={target.x} y2={currentLineY + SPOUSE_LINE_OFFSET} className={`spouse-line ${isSelected ? 'selected' : ''}`} />
+{lineDrawingState.active && (
+    <circle
+        cx={midX} cy={currentLineY} r="8"
+        className="line-drawing-target"
+        onClick={(e) => { e.stopPropagation(); handlePointSelection({ type: 'spouseLine', id: rel.id, position: 'middle' }); }}
+    />
+)}
+</g>
+);
+} else if (rel.type === 'parent-child') {
+const child = findPersonById(rel.childId);
+if (!child || !rel.parents) return null;
+
+if (rel.parents.length === 2) {
+const parent1 = findPersonById(rel.parents[0]);
+const parent2 = findPersonById(rel.parents[1]);
+if (!parent1 || !parent2) return null;
+const parentSpouseRel = relationships.find(r => r.type === 'spouse' && ((r.sourceId === parent1.id && r.targetId === parent2.id) || (r.sourceId === parent2.id && r.targetId === parent1.id)));
+if (!parentSpouseRel) return null;
+
+const parentConnectionX = rel.childConnectorX ?? (parent1.x + parent2.x) / 2;
+const parentLineY = (parentSpouseRel.lineY || (parent1.y + parent2.y)/2) + SPOUSE_LINE_OFFSET;
+const childTop = child.y - getNodeHeight(child) / 2;
+const connectionMidY = rel.connectionMidY ?? (childTop - 20);
+
+return (
+<g key={rel.id}>
+<VerticalLineWithBridges x={parentConnectionX} y1={parentLineY} y2={connectionMidY} ownerId={rel.id} className={`child-connector ${isSelected ? 'selected' : ''}`}/>
+<line x1={parentConnectionX} y1={connectionMidY} x2={child.x} y2={connectionMidY} className={`relationship-line ${isSelected ? 'selected' : ''}`} />
+<VerticalLineWithBridges x={child.x} y1={connectionMidY} y2={childTop} ownerId={rel.id} className={`child-connector ${isSelected ? 'selected' : ''}`}/>
+
+<>
+    <circle cx={parentConnectionX} cy={parentLineY} r="10" className="child-connector-handle line-handle" data-rel-id={rel.id} />
+    <line x1={parentConnectionX} y1={connectionMidY} x2={child.x} y2={connectionMidY} className="two-parent-child-mid-line-handle line-handle" data-rel-id={rel.id} />
+</>
+</g>
+);
+} else if (rel.parents.length === 1) {
+const parent = findPersonById(rel.parents[0]);
+if (!parent) return null;
+const parentBottom = parent.y + getNodeHeight(parent) / 2;
+const childTop = child.y - getNodeHeight(child) / 2;
+const midY = rel.midY || ((parentBottom + childTop) / 2);
+
+return (
+<g key={rel.id}>
+<VerticalLineWithBridges x={parent.x} y1={parentBottom} y2={midY} ownerId={rel.id} className={`child-connector ${isSelected ? 'selected' : ''}`}/>
+<line x1={parent.x} y1={midY} x2={child.x} y2={midY} className={`relationship-line ${isSelected ? 'selected' : ''}`} />
+<VerticalLineWithBridges x={child.x} y1={midY} y2={childTop} ownerId={rel.id} className={`child-connector ${isSelected ? 'selected' : ''}`}/>
+<line x1={parent.x} y1={midY} x2={child.x} y2={midY} className="single-parent-line-handle line-handle" data-rel-id={rel.id} />
+</g>
+);
+}
+}
+return null;
+})}
+{guides.map((guide, index) => (
+<line key={`guide-${index}`} x1={guide.x1 || guide.x} y1={guide.y1 || guide.y} x2={guide.x2 || guide.x} y2={guide.y2 || guide.y} className="smart-guide" />
+))}
+{visiblePeople.map(person => {
+const layout = nodeLayouts.get(person.id);
+if (!layout) return null;
+return (
+<Person
+key={person.id}
+person={person}
+layout={layout}
+onAddPerson={addPerson}
+onUpdateName={updatePersonName}
+onUpdatePersonStyle={updatePersonStyle}
+onUpdatePersonTitle={updatePersonTitle}
+onNodePointerDown={onPointerDown}
+onDeletePerson={deletePerson}
+onStartLink={startLink}
+onNodeClick={handleNodeClick}
+linkingState={linkingState}
+getSpousesOf={getSpousesOf}
+bringToFront={bringToFront}
+lineDrawingState={lineDrawingState}
+onPointSelect={handlePointSelection}
+relationships={relationships}
+isSelected={selectedItems.people.has(person.id)}
+isHighlighted={highlightedPersonId === person.id}
+/>
+)}
+)}
+{lassoState.active && (
+    <rect
+        x={Math.min(lassoState.start.x, lassoState.end.x)}
+        y={Math.min(lassoState.start.y, lassoState.end.y)}
+        width={Math.abs(lassoState.start.x - lassoState.end.x)}
+        height={Math.abs(lassoState.start.y - lassoState.end.y)}
+        fill="rgba(0, 123, 255, 0.2)"
+        stroke="rgba(0, 123, 255, 0.6)"
+        strokeWidth="1"
+        pointerEvents="none"
+    />
+)}
+</svg>
+</div>
+</>
+);
+};
+const container = document.getElementById('root');
+const root = ReactDOM.createRoot(container);
+root.render(<App />);
+</script>
+</body>
+</html>

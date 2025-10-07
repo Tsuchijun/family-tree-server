@@ -8,6 +8,8 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
 <style>
 body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; height: 100vh; overflow: hidden; }
 h1 { color: #333; margin: 15px 0; flex-shrink: 0; }
@@ -123,6 +125,39 @@ cursor: crosshair;
 transition: all 0.2s;
 }
 .line-drawing-target:hover { fill: rgba(0, 123, 255, 0.5); }
+/* --- ログイン画面用のスタイル --- */
+.login-container {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    width: 95vw;
+    margin-bottom: 20px;
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    padding: 40px;
+    box-sizing: border-box;
+}
+.login-container h2 { margin-bottom: 24px; }
+.login-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 24px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    background-color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+.login-button:hover { background-color: #f5f5f5; }
+.login-button img { width: 20px; height: 20px; margin-right: 12px; }
+.loading-container { display: flex; justify-content: center; align-items: center; height: 100%; font-size: 18px; }
+.user-info { display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+.user-info span { font-size: 12px; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -130,6 +165,17 @@ transition: all 0.2s;
 <div id="root"></div>
 
 <script type="text/babel">
+const firebaseConfig = {
+  apiKey: "AIzaSyAkzv47m-1sXzsRaYMku3DgezG1Okbviog",
+  authDomain: "familiy-tree-app.firebaseapp.com",
+  projectId: "familiy-tree-app",
+  storageBucket: "familiy-tree-app.firebasestorage.app",
+  messagingSenderId: "234928188793",
+  appId: "1:234928188793:web:16b3bef548ca94c6b093a8",
+  measurementId: "G-ZQXSGV3FVT"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
 const { useState, useRef, useEffect, useMemo, useCallback } = React;
 
 const FONT_OPTIONS = [
@@ -438,7 +484,7 @@ onMouseLeave={() => { if (!linkMenuVisible && !childAddMenuVisible && !editMenuV
 );
 };
 
-const App = () => {
+const App = ({ user, onSignOut }) => {
     // ===== ここから共同編集のための修正を加えています =====
 
     const defaultPersonStyle = { boxColor: '#ffffff', textColor: '#333333', isBold: false, isItalic: false, fontFamily: 'sans-serif', title: '' };
@@ -460,7 +506,7 @@ const App = () => {
     };
 
     useEffect(() => {
-        const socket = io("http://localhost:4000");
+        const socket = io("https://family-tree-server-fnax.onrender.com");
         socketRef.current = socket;
 
         socket.on('connect', () => {
@@ -1298,6 +1344,10 @@ return (
             </div>
         )}
     </div>
+    <div className="toolbar-group user-info">
+        <span>{user.displayName || user.email}</span>
+        <button onClick={onSignOut}>サインアウト</button>
+    </div>
 </div>
 <div className="status-bar">
     <span className="status-bar-text">{getStatusText()}</span>
@@ -1435,9 +1485,64 @@ isHighlighted={highlightedPersonId === person.id}
 </>
 );
 };
+// --- ログイン画面のコンポーネント ---
+const LoginComponent = () => {
+    const handleGoogleLogin = () => {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        auth.signInWithPopup(provider)
+            .catch((error) => {
+                console.error("Googleログインエラー:", error);
+                alert(`ログインに失敗しました: ${error.message}`);
+            });
+    };
+
+    return (
+        <div className="login-container">
+            <h2>家系図エディタへようこそ</h2>
+            <p>閲覧・編集するにはログインしてください</p>
+            <button className="login-button" onClick={handleGoogleLogin}>
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google icon" />
+                Googleでログイン
+            </button>
+        </div>
+    );
+};
+
+// --- 認証状態を管理する親コンポーネント ---
+const AuthWrapper = () => {
+    const [user, setUser] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        // Firebaseの認証状態の変更を監視
+        const unsubscribe = auth.onAuthStateChanged(currentUser => {
+            setUser(currentUser);
+            setIsLoading(false);
+        });
+
+        // コンポーネントがアンマウントされるときに監視を解除
+        return () => unsubscribe();
+    }, []);
+
+    const handleSignOut = () => {
+        auth.signOut();
+    };
+
+    if (isLoading) {
+        return <div className="loading-container">読み込み中...</div>;
+    }
+
+    if (user) {
+        // ログイン済みなら、家系図エディタを表示
+        return <App user={user} onSignOut={handleSignOut} />;
+    } else {
+        // 未ログインなら、ログイン画面を表示
+        return <LoginComponent />;
+    }
+};
 const container = document.getElementById('root');
 const root = ReactDOM.createRoot(container);
-root.render(<App />);
+root.render(<AuthWrapper />);
 </script>
 </body>
 </html>
